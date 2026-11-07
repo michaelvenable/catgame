@@ -52,6 +52,7 @@ namespace CatGame.EditorTools
             SetUpLighting();
             SetUpCamera(cat.transform);
             SetUpPostProcessing();
+            TitleScreenBuilder.Build(cat, Camera.main);
 
             EditorSceneManager.SaveScene(scene, ScenePath);
             AddToBuildSettings(ScenePath);
@@ -305,7 +306,7 @@ namespace CatGame.EditorTools
             return material;
         }
 
-        static void SetReference(Object component, string field, Object value)
+        internal static void SetReference(Object component, string field, Object value)
         {
             var so = new SerializedObject(component);
             so.FindProperty(field).objectReferenceValue = value;
