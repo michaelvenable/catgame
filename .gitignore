@@ -1,0 +1,43 @@
+# Unity-generated folders (the Unity project lives in CatGame/)
+/CatGame/[Ll]ibrary/
+/CatGame/[Tt]emp/
+/CatGame/[Oo]bj/
+/CatGame/[Bb]uild/
+/CatGame/[Bb]uilds/
+/CatGame/[Ll]ogs/
+/CatGame/[Uu]ser[Ss]ettings/
+/CatGame/[Mm]emoryCaptures/
+/CatGame/[Rr]ecordings/
+
+# IDE / generated project files
+.vs/
+.vscode/
+.idea/
+*.csproj
+*.sln
+*.slnx
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+
+# Builds and exports
+*.apk
+*.aab
+*.unitypackage
+sysinfo.txt
+crashlytics-build.properties
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code personal settings
+.claude/settings.local.json
