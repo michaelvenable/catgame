@@ -13,7 +13,15 @@ namespace CatGame
         public Vector2 Move => move.ReadValue<Vector2>();
         public bool Run => run.IsPressed();
         public bool JumpPressed => jump.WasPressedThisFrame();
-        public bool AttackPressed => attack.WasPressedThisFrame();
+        // A click that only re-captures a free cursor must not also swipe.
+        public bool AttackPressed => attack.WasPressedThisFrame() && !IsCursorRecaptureClick();
+
+        static bool IsCursorRecaptureClick()
+        {
+            bool mouseClicked = Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame;
+            bool padAttacked = Gamepad.current != null && Gamepad.current.buttonWest.wasPressedThisFrame;
+            return mouseClicked && !padAttacked && Cursor.lockState != CursorLockMode.Locked;
+        }
 
         void Awake()
         {

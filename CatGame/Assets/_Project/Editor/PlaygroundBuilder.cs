@@ -19,13 +19,25 @@ namespace CatGame.EditorTools
         static Material baseMaterial;
 
         [MenuItem("Cat Game/Build Playground Scene")]
-        public static void Build()
+        static void BuildFromMenu() => BuildPlayground(interactive: true);
+
+        // Parameterless so -executeMethod can call it. Never shows a modal: fails fast on unsaved work instead.
+        public static void Build() => BuildPlayground(interactive: false);
+
+        static void BuildPlayground(bool interactive)
         {
-            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
-                return;
-            if (File.Exists(ScenePath) &&
-                !EditorUtility.DisplayDialog("Rebuild playground?", $"{ScenePath} already exists and will be replaced.", "Replace", "Cancel"))
-                return;
+            if (interactive)
+            {
+                if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+                    return;
+                if (File.Exists(ScenePath) &&
+                    !EditorUtility.DisplayDialog("Rebuild playground?", $"{ScenePath} already exists and will be replaced.", "Replace", "Cancel"))
+                    return;
+            }
+            else if (Enumerable.Range(0, EditorSceneManager.sceneCount).Any(i => EditorSceneManager.GetSceneAt(i).isDirty))
+            {
+                throw new System.InvalidOperationException("An open scene has unsaved changes; save or discard them before rebuilding the playground.");
+            }
 
             Directory.CreateDirectory(SceneFolder);
             Directory.CreateDirectory(MaterialFolder);

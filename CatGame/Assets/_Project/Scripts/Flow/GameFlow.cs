@@ -18,11 +18,13 @@ namespace CatGame
         public GameState State { get; private set; }
         bool transitioning;
 
-        void Start()
+        IEnumerator Start()
         {
             EnterTitle();
+            transitioning = true;
             fader.Snap(1f);
-            StartCoroutine(fader.Fade(0f, fadeDuration));
+            yield return fader.Fade(0f, fadeDuration);
+            transitioning = false;
         }
 
         void Update()

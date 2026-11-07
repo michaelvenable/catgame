@@ -59,16 +59,14 @@ namespace CatGame
             pivot = target.position + pivotOffset;
         }
 
-        void Update()
+        void LateUpdate()
         {
+            // Re-lock in LateUpdate so gameplay Updates this frame still see the cursor as free.
             if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
                 SetCursorLocked(false);
             else if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
                 SetCursorLocked(true);
-        }
 
-        void LateUpdate()
-        {
             if (target == null)
                 return;
 

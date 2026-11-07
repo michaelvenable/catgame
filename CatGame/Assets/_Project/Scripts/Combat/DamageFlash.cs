@@ -23,6 +23,16 @@ namespace CatGame
                 originalColors[i] = renderers[i].material.color;
         }
 
+        void OnDestroy()
+        {
+            // renderer.material instanced these; Unity won't free them with the object.
+            foreach (Renderer r in renderers)
+            {
+                if (r != null)
+                    Destroy(r.material);
+            }
+        }
+
         void OnEnable() => health.onDamaged.AddListener(Flash);
         void OnDisable() => health.onDamaged.RemoveListener(Flash);
 
