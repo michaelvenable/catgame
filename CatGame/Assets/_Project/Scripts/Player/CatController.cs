@@ -9,7 +9,8 @@ namespace CatGame
         static readonly int GroundedParam = Animator.StringToHash("Grounded");
 
         [Header("Movement")]
-        [SerializeField] float walkSpeed = 3f;
+        [Tooltip("A cat's walk; much faster and the gait reads as a trot.")]
+        [SerializeField] float walkSpeed = 1.6f;
         [SerializeField] float runSpeed = 7f;
         [SerializeField] float acceleration = 30f;
         [SerializeField] float turnSpeed = 720f;
@@ -33,6 +34,9 @@ namespace CatGame
         float lastGroundedTime = float.NegativeInfinity;
 
         public float SpeedMultiplier { get; set; } = 1f;
+        // How the body actually moved last frame, after collisions (zero when walking into a wall).
+        public Vector3 Velocity => body.velocity;
+        public bool IsGrounded => body.isGrounded;
 
         void Awake()
         {

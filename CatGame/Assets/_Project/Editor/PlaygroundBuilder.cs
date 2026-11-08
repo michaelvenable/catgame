@@ -1,7 +1,6 @@
 using System.IO;
 using System.Linq;
 using UnityEditor;
-using UnityEditor.Animations;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -20,11 +19,6 @@ namespace CatGame.EditorTools
         const string CatFolder = "Assets/_Project/Art/Characters/Cat";
         const string CatModelPath = CatFolder + "/Cat.fbx";
         const string CatTexturePath = CatFolder + "/Cat_Albedo.jpg";
-        const string CatControllerPath = CatFolder + "/Cat.controller";
-        const string CatWalkClip = "Walk";
-        const string CatTailRootBone = "tripo::Tail_0";
-        const float WalkPlaybackPerMeter = 0.6f;
-        const float MovingThreshold = 0.2f;
 
         static Material baseMaterial;
 
@@ -128,82 +122,62 @@ namespace CatGame.EditorTools
             var modelAsset = AssetDatabase.LoadAssetAtPath<GameObject>(CatModelPath);
             if (modelAsset == null)
                 throw new System.InvalidOperationException($"Cat model not found at {CatModelPath}.");
-            // May reimport the model, which would reset overrides on an existing instance; run it first.
-            AnimationClip walkClip = ConfigureCatModel();
             var model = (GameObject)PrefabUtility.InstantiatePrefab(modelAsset);
             model.name = "Model";
             model.transform.SetParent(visuals, false);
             model.GetComponentInChildren<SkinnedMeshRenderer>().sharedMaterial = GetCatMaterial();
-
-            var animator = model.GetComponent<Animator>();
-            if (animator == null)
-                animator = model.AddComponent<Animator>();
-            animator.runtimeAnimatorController = BuildCatAnimator(walkClip);
-            animator.applyRootMotion = false;
-
-            Transform tailRoot = FindDescendant(model.transform, CatTailRootBone);
-            if (tailRoot == null)
-                throw new System.InvalidOperationException($"Bone '{CatTailRootBone}' not found in {CatModelPath}.");
+            // The skeleton is posed from code; an Animator would fight it.
+            if (model.TryGetComponent(out Animator importedAnimator))
+                Object.DestroyImmediate(importedAnimator);
 
             cat.AddComponent<CatInput>();
-            var controller = cat.AddComponent<CatController>();
-            SetReference(controller, "animator", animator);
+            cat.AddComponent<CatController>();
             cat.AddComponent<CatCombat>();
-            var idle = cat.AddComponent<CatIdleMotion>();
-            SetReference(idle, "torso", model.transform);
-            SetReference(idle, "tailPivot", tailRoot);
+            var motion = cat.AddComponent<CatProceduralMotion>();
+            WireCatSkeleton(motion, model.transform);
             return cat;
         }
 
-        // Tripo exports the walk as a non-looping take; name it and loop it once, in the importer.
-        static AnimationClip ConfigureCatModel()
+        // Bone names from the Tripo quadruped rig. Front legs: shoulder, elbow, wrist, paw. Hind: hip, knee, hock, paw.
+        static void WireCatSkeleton(CatProceduralMotion motion, Transform model)
         {
-            var importer = (ModelImporter)AssetImporter.GetAtPath(CatModelPath);
-            ModelImporterClipAnimation[] clips = importer.clipAnimations;
-            if (clips.Length != 1 || clips[0].name != CatWalkClip || !clips[0].loopTime)
+            string[][] legBones =
             {
-                clips = importer.defaultClipAnimations;
-                if (clips.Length != 1)
-                    throw new System.InvalidOperationException($"Expected one animation take in {CatModelPath}, found {clips.Length}.");
-                clips[0].name = CatWalkClip;
-                clips[0].loopTime = true;
-                importer.clipAnimations = clips;
-                importer.SaveAndReimport();
+                new[] { "tripo::0_Left_Limb_1", "tripo::0_Left_Limb_2", "tripo::0_Left_Limb_3", "tripo::0_Left_Limb_4" },
+                new[] { "tripo::0_Right_Limb_1", "tripo::0_Right_Limb_2", "tripo::0_Right_Limb_3", "tripo::0_Right_Limb_4" },
+                new[] { "tripo::1_Left_Limb_0", "tripo::1_Left_Limb_1", "tripo::1_Left_Limb_2", "tripo::1_Left_Limb_3" },
+                new[] { "tripo::1_Right_Limb_0", "tripo::1_Right_Limb_1", "tripo::1_Right_Limb_2", "tripo::1_Right_Limb_3" },
+            };
+            string[] legFields = { "upper", "lower", "ankle", "paw" };
+            string[] tailBones = { "tripo::Tail_0", "tripo::Tail_1", "tripo::Tail_2", "tripo::Tail_3", "tripo::Tail_4", "tripo::Tail_5" };
+
+            var so = new SerializedObject(motion);
+            so.FindProperty("bodyRoot").objectReferenceValue = RequireBone(model, "tripo::Root");
+            // bone_27 is the neck: it carries the head but, unlike the Head_* chain, not the front legs or tail.
+            so.FindProperty("neck").objectReferenceValue = RequireBone(model, "bone_27");
+
+            SerializedProperty legs = so.FindProperty("legs");
+            legs.arraySize = legBones.Length;
+            for (int i = 0; i < legBones.Length; i++)
+            {
+                SerializedProperty leg = legs.GetArrayElementAtIndex(i);
+                for (int j = 0; j < legFields.Length; j++)
+                    leg.FindPropertyRelative(legFields[j]).objectReferenceValue = RequireBone(model, legBones[i][j]);
             }
 
-            return AssetDatabase.LoadAllAssetsAtPath(CatModelPath).OfType<AnimationClip>().Single(c => c.name == CatWalkClip);
+            SerializedProperty tail = so.FindProperty("tail");
+            tail.arraySize = tailBones.Length;
+            for (int i = 0; i < tailBones.Length; i++)
+                tail.GetArrayElementAtIndex(i).objectReferenceValue = RequireBone(model, tailBones[i]);
+            so.ApplyModifiedPropertiesWithoutUndo();
         }
 
-        static RuntimeAnimatorController BuildCatAnimator(AnimationClip walkClip)
+        static Transform RequireBone(Transform model, string name)
         {
-            AssetDatabase.DeleteAsset(CatControllerPath);
-            var controller = AnimatorController.CreateAnimatorControllerAtPath(CatControllerPath);
-            controller.AddParameter("Speed", AnimatorControllerParameterType.Float);
-            controller.AddParameter("Grounded", AnimatorControllerParameterType.Bool);
-
-            AnimatorStateMachine states = controller.layers[0].stateMachine;
-            // No motion: the Animator writes the model's rest pose, a relaxed stand.
-            AnimatorState idle = states.AddState("Idle");
-            AnimatorState walk = states.AddState("Walk");
-            walk.motion = walkClip;
-            // Playback rate = Speed (m/s) x this. Tripo's walk covers far less ground than the controller's speeds,
-            // so this trades some foot slide for a cadence that doesn't look frantic.
-            walk.speed = WalkPlaybackPerMeter;
-            walk.speedParameter = "Speed";
-            walk.speedParameterActive = true;
-            states.defaultState = idle;
-
-            AnimatorStateTransition toWalk = idle.AddTransition(walk);
-            toWalk.hasExitTime = false;
-            toWalk.duration = 0.15f;
-            toWalk.AddCondition(AnimatorConditionMode.Greater, MovingThreshold, "Speed");
-            AnimatorStateTransition toIdle = walk.AddTransition(idle);
-            toIdle.hasExitTime = false;
-            toIdle.duration = 0.2f;
-            toIdle.AddCondition(AnimatorConditionMode.Less, MovingThreshold, "Speed");
-
-            AssetDatabase.SaveAssets();
-            return controller;
+            Transform bone = FindDescendant(model, name);
+            if (bone == null)
+                throw new System.InvalidOperationException($"Bone '{name}' not found in {CatModelPath}.");
+            return bone;
         }
 
         static Material GetCatMaterial()
