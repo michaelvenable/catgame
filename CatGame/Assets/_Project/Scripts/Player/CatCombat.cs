@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -28,6 +29,11 @@ namespace CatGame
         CatController controller;
         bool attacking;
 
+        // Raised when a swipe begins; the hit lands Windup seconds later and the swipe ends Recovery after that.
+        public event Action AttackStarted;
+        public float Windup => windup;
+        public float Recovery => recovery;
+
         void Awake()
         {
             input = GetComponent<CatInput>();
@@ -53,6 +59,7 @@ namespace CatGame
             controller.SpeedMultiplier = attackMoveMultiplier;
             if (animator != null)
                 animator.SetTrigger(AttackParam);
+            AttackStarted?.Invoke();
 
             yield return new WaitForSeconds(windup);
             DealDamage();

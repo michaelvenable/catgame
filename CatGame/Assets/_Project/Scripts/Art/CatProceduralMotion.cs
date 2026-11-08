@@ -62,7 +62,18 @@ namespace CatGame
         [SerializeField] float tailGallopDrop = 35f;
         [SerializeField] float tailTurnLag = 0.12f;
 
+        [Header("Swipe")]
+        [Tooltip("Paw offsets from its standing spot, written for the right paw (+x = outward). " +
+                 "Cocked: drawn up to the chest. Strike: fully extended when the hit lands. Follow: low, across the body.")]
+        [SerializeField] Vector3 swipeCocked = new(0.03f, 0.26f, 0f);
+        [SerializeField] Vector3 swipeStrike = new(-0.07f, 0.16f, 0.36f);
+        [SerializeField] Vector3 swipeFollow = new(-0.1f, 0.05f, 0.26f);
+        [Tooltip("How far the body lunges into the strike, and how far it pitches forward.")]
+        [SerializeField] float swipeLunge = 0.06f;
+        [SerializeField] float swipeLean = 8f;
+
         CatController controller;
+        CatCombat combat;
         Collider[] selfColliders;
         readonly RaycastHit[] hitBuffer = new RaycastHit[8];
 
@@ -103,9 +114,18 @@ namespace CatGame
         float turnRate;
         float tailLag;
 
+        // Swipe state. swipeClock < 0 means no swipe is playing.
+        const int FrontRight = 1;
+        float swipeClock = -1f;
+        bool swipeJustStarted;
+        int swipeLeg = FrontLeft;   // StartSwipe alternates first, so the first swipe is the right paw
+        Vector3 swipePaw;      // this frame's paw offset, in this transform's space
+        float swipeThrust;     // -1 (leaning back) .. 1 (lunging), drives body, tail and paw shape
+
         void Awake()
         {
             controller = GetComponent<CatController>();
+            combat = GetComponent<CatCombat>();
             selfColliders = GetComponentsInChildren<Collider>();
             CaptureRest();
             Array.Copy(WalkOffsets, offsets, 4);
@@ -116,6 +136,75 @@ namespace CatGame
             }
             lastYaw = transform.eulerAngles.y;
         }
+
+        void OnEnable()
+        {
+            if (combat != null)
+                combat.AttackStarted += StartSwipe;
+        }
+
+        void OnDisable()
+        {
+            if (combat != null)
+                combat.AttackStarted -= StartSwipe;
+            if (swipeClock >= 0f)
+                EndSwipe();
+        }
+
+        // Alternate paws, like a cat batting at something.
+        void StartSwipe()
+        {
+            if (swipeClock >= 0f)
+                EndSwipe();
+            swipeLeg = swipeLeg == FrontRight ? FrontLeft : FrontRight;
+            swipeClock = 0f;
+            swipeJustStarted = true;
+            swinging[swipeLeg] = false;
+        }
+
+        void EndSwipe()
+        {
+            swipeClock = -1f;
+            swipeThrust = 0f;
+            plantedAt[swipeLeg] = GroundPoint(transform.TransformPoint(homeFeet[swipeLeg]));
+            airFeet[swipeLeg] = homeFeet[swipeLeg];   // a swipe that ends mid-jump hands over from the end pose
+        }
+
+        // Keyframes: stand -> cocked -> strike (exactly when CatCombat deals damage) -> follow-through -> stand.
+        void UpdateSwipe(float dt)
+        {
+            if (swipeClock < 0f)
+                return;
+            // CatCombat's clock starts in the frame the attack begins; counting that frame too would put the
+            // strike pose a frame ahead of the damage.
+            if (swipeJustStarted)
+                swipeJustStarted = false;
+            else
+                swipeClock += dt;
+
+            float hit = combat.Windup, end = combat.Windup + combat.Recovery;
+            float cock = hit * 0.6f, follow = hit + combat.Recovery * 0.35f;
+            if (swipeClock >= end)
+            {
+                EndSwipe();
+                return;
+            }
+
+            Vector3 from, to;
+            float thrustFrom, thrustTo, t;
+            if (swipeClock < cock) { from = Vector3.zero; to = swipeCocked; thrustFrom = 0f; thrustTo = -0.4f; t = swipeClock / cock; }
+            else if (swipeClock < hit) { from = swipeCocked; to = swipeStrike; thrustFrom = -0.4f; thrustTo = 1f; t = (swipeClock - cock) / (hit - cock); }
+            else if (swipeClock < follow) { from = swipeStrike; to = swipeFollow; thrustFrom = 1f; thrustTo = 0.6f; t = (swipeClock - hit) / (follow - hit); }
+            else { from = swipeFollow; to = Vector3.zero; thrustFrom = 0.6f; thrustTo = 0f; t = (swipeClock - follow) / (end - follow); }
+
+            float eased = t * t * (3f - 2f * t);
+            swipePaw = Vector3.Lerp(from, to, eased);
+            if (swipeLeg == FrontLeft)
+                swipePaw = Mirror(swipePaw);
+            swipeThrust = Mathf.Lerp(thrustFrom, thrustTo, eased);
+        }
+
+        bool IsSwiping(int i) => swipeClock >= 0f && i == swipeLeg;
 
         void CaptureRest()
         {
@@ -177,6 +266,7 @@ namespace CatGame
 
             UpdateAirState(dt, velocity.y);
             UpdateGaitBlend(speed, dt);
+            UpdateSwipe(dt);
 
             float cycle = Mathf.Lerp(strideLength.x, strideLength.y, Mathf.Pow(Mathf.Clamp01(speed / topSpeed), strideCurve));
             float duty = Mathf.Lerp(Mathf.Lerp(0.55f, 0.5f, trotWeight), 0.32f, gallopWeight);
@@ -189,7 +279,9 @@ namespace CatGame
             PoseHead();
             for (int i = 0; i < 4; i++)
             {
-                if (airborne)
+                if (IsSwiping(i))
+                    feet[i] = transform.TransformPoint(homeFeet[i] + swipePaw);
+                else if (airborne)
                     feet[i] = AirFoot(i, velocity.y, dt);
                 else
                     feet[i] = GroundFoot(i, planar, duty, frequency);
@@ -260,24 +352,28 @@ namespace CatGame
         void PoseBody(float speed, float verticalSpeed)
         {
             const float TwoPi = Mathf.PI * 2f;
-            float moving = Mathf.Clamp01(speed / 0.5f);
+            float stride = Mathf.Clamp01(speed / 0.5f);
             float t = Time.time;
 
             // Walk/trot: a small bob per footfall. Gallop: one big rock per stride.
-            float bobAmp = Mathf.Lerp(Mathf.Lerp(0.008f, 0.015f, trotWeight), 0.03f, gallopWeight) * moving;
+            float bobAmp = Mathf.Lerp(Mathf.Lerp(0.008f, 0.015f, trotWeight), 0.03f, gallopWeight) * stride;
             float bobFreq = Mathf.Lerp(2f, 1f, gallopWeight);
-            float height = -crouch * moving
+            float height = -crouch * stride
                 - Mathf.Abs(Mathf.Sin(phase * TwoPi * bobFreq * 0.5f)) * bobAmp
                 + Mathf.Sin(t * breatheFrequency * TwoPi) * breatheAmount
                 - squash * squash * landSquash;
 
-            float pitch = Mathf.Sin(phase * TwoPi) * 6f * gallopWeight * moving;
-            float roll = Mathf.Sin(phase * TwoPi) * 2f * (1f - gallopWeight) * moving;
+            float pitch = Mathf.Sin(phase * TwoPi) * 6f * gallopWeight * stride;
+            float roll = Mathf.Sin(phase * TwoPi) * 2f * (1f - gallopWeight) * stride;
             if (airborne)
                 pitch = -Mathf.Clamp(verticalSpeed * 2.5f, -18f, 18f);
+            // Swipe: rock back while cocking, then lunge into the strike, shifting onto the other front paw.
+            pitch += swipeThrust * swipeLean;
+            // Positive roll about +forward tips the back to the left, onto the left paw.
+            roll += swipeThrust * 3f * (swipeLeg == FrontRight ? 1f : -1f);
 
             Vector3 pivot = transform.TransformPoint(bodyPivot);
-            bodyRoot.position += transform.up * height;
+            bodyRoot.position += transform.up * height + transform.forward * (swipeThrust * swipeLunge);
             bodyRoot.RotateAround(pivot, transform.right, pitch);
             bodyRoot.RotateAround(pivot, transform.forward, roll);
             bodyPitch = pitch;
@@ -355,9 +451,16 @@ namespace CatGame
             // On the ground, distal segments and paws stay upright; in the air they follow the tilted body.
             Quaternion frame = airborne ? bodyTilt * transform.rotation : transform.rotation;
             Vector3 footTarget = feet[i];
-            Vector3 ankleTarget = footTarget - frame * distal[i];
-
             Vector3 a = leg.upper.position, b = leg.lower.position, c = leg.ankle.position;
+            Vector3 distalWorld = frame * distal[i];
+            if (IsSwiping(i))
+            {
+                // A striking paw extends in line with the leg instead of hanging below the wrist.
+                Vector3 inLine = (footTarget - a).normalized * distalWorld.magnitude;
+                distalWorld = Vector3.Slerp(distalWorld, inLine, Mathf.Clamp01(swipeThrust));
+            }
+            Vector3 ankleTarget = footTarget - distalWorld;
+
             float upperLength = Vector3.Distance(a, b), lowerLength = Vector3.Distance(b, c);
             Vector3 toTarget = ankleTarget - a;
             float distance = Mathf.Clamp(toTarget.magnitude, 0.001f, (upperLength + lowerLength) * 0.999f);
@@ -373,8 +476,10 @@ namespace CatGame
             leg.lower.rotation = Quaternion.FromToRotation(leg.ankle.position - leg.lower.position, reached - leg.lower.position) * leg.lower.rotation;
             leg.ankle.rotation = Quaternion.FromToRotation(leg.paw.position - leg.ankle.position, footTarget - leg.ankle.position) * leg.ankle.rotation;
 
-            // Planted paws lie flat; swinging paws curl back.
+            // Planted paws lie flat; swinging paws curl back. A swiping paw curls while cocked and opens to strike.
             float curl = swinging[i] || airborne ? 25f : 0f;
+            if (IsSwiping(i))
+                curl = Mathf.Lerp(50f, -35f, Mathf.InverseLerp(-0.4f, 1f, swipeThrust));
             leg.paw.rotation = Quaternion.AngleAxis(curl, transform.right) * frame * pawStand[i];
         }
 
@@ -383,7 +488,7 @@ namespace CatGame
             const float TwoPi = Mathf.PI * 2f;
             tailLag = Mathf.Lerp(tailLag, Mathf.Clamp(-turnRate * tailTurnLag, -30f, 30f), 1f - Mathf.Exp(-5f * dt));
             // Positive drop lowers the tail toward horizontal; in the air it lifts for balance.
-            float drop = tailGallopDrop * gallopWeight + (airborne ? -15f : 0f);
+            float drop = tailGallopDrop * gallopWeight + (airborne ? -15f : 0f) - Mathf.Clamp01(swipeThrust) * 15f;
             float t = Time.time;
             for (int i = 0; i < tail.Length; i++)
             {
