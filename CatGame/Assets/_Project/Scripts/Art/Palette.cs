@@ -13,6 +13,7 @@ namespace CatGame
         public static readonly Color Props = Hex("#6E8FB8");         // denim
         public static readonly Color Shadow = Hex("#4A4E6E");        // dusk indigo
         public static readonly Color Accent = Hex("#FFC93C");        // sunflower: hits, pickups
+        public static readonly Color TextureTint = Hex("#FFFFFF");   // untinted: textured models keep their albedo
 
         public static readonly Color Sun = Hex("#FFEFD6");
         public static readonly Color SkyTint = Hex("#8FC1EE");

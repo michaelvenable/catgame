@@ -1,6 +1,7 @@
 using System.IO;
 using System.Linq;
 using UnityEditor;
+using UnityEditor.Animations;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -15,6 +16,15 @@ namespace CatGame.EditorTools
         const string SettingsFolder = "Assets/_Project/Settings";
         const string ScenePath = SceneFolder + "/Playground.unity";
         const string VolumeProfilePath = SettingsFolder + "/PlaygroundPost.asset";
+
+        const string CatFolder = "Assets/_Project/Art/Characters/Cat";
+        const string CatModelPath = CatFolder + "/Cat.fbx";
+        const string CatTexturePath = CatFolder + "/Cat_Albedo.jpg";
+        const string CatControllerPath = CatFolder + "/Cat.controller";
+        const string CatWalkClip = "Walk";
+        const string CatTailRootBone = "tripo::Tail_0";
+        const float WalkPlaybackPerMeter = 0.6f;
+        const float MovingThreshold = 0.2f;
 
         static Material baseMaterial;
 
@@ -51,15 +61,13 @@ namespace CatGame.EditorTools
             {
                 Ground = GetMaterial("Ground", Palette.Ground),
                 Structure = GetMaterial("Structure", Palette.Structure),
-                CatPrimary = GetMaterial("CatPrimary", Palette.CatPrimary),
-                CatSecondary = GetMaterial("CatSecondary", Palette.CatSecondary),
                 Props = GetMaterial("Props", Palette.Props),
                 Shadow = GetMaterial("Shadow", Palette.Shadow),
                 Accent = GetMaterial("Accent", Palette.Accent),
             };
 
             BuildLevel(mats);
-            GameObject cat = BuildCat(mats);
+            GameObject cat = BuildCat();
             BuildDummies(mats);
             SetUpLighting();
             SetUpCamera(cat.transform);
@@ -74,7 +82,7 @@ namespace CatGame.EditorTools
 
         struct Materials
         {
-            public Material Ground, Structure, CatPrimary, CatSecondary, Props, Shadow, Accent;
+            public Material Ground, Structure, Props, Shadow, Accent;
         }
 
         static void BuildLevel(Materials m)
@@ -102,8 +110,7 @@ namespace CatGame.EditorTools
             CreatePrimitive("Yarn Ball", PrimitiveType.Sphere, props, new Vector3(-1.5f, 0.2f, 2.5f), Vector3.one * 0.4f, m.Accent);
         }
 
-        // Proportions follow the craft floor's worked quadruped, re-derived for a cat.
-        static GameObject BuildCat(Materials m)
+        static GameObject BuildCat()
         {
             var cat = new GameObject("Cat");
             cat.transform.position = new Vector3(0f, 0.05f, 0f);
@@ -118,54 +125,109 @@ namespace CatGame.EditorTools
             visuals.SetParent(cat.transform, false);
             visuals.localScale = Vector3.one * 1.25f;
 
-            var torso = new GameObject("Torso").transform;
-            torso.SetParent(visuals, false);
-            torso.localPosition = new Vector3(0f, -0.08f, 0f);
-            CreateVisual("Body", PrimitiveType.Sphere, torso, new Vector3(0f, 0.42f, 0f), new Vector3(0.5f, 0.42f, 0.62f), m.CatPrimary);
-            CreateVisual("Chest", PrimitiveType.Sphere, torso, new Vector3(0f, 0.36f, 0.2f), new Vector3(0.34f, 0.3f, 0.3f), m.CatSecondary);
+            var modelAsset = AssetDatabase.LoadAssetAtPath<GameObject>(CatModelPath);
+            if (modelAsset == null)
+                throw new System.InvalidOperationException($"Cat model not found at {CatModelPath}.");
+            // May reimport the model, which would reset overrides on an existing instance; run it first.
+            AnimationClip walkClip = ConfigureCatModel();
+            var model = (GameObject)PrefabUtility.InstantiatePrefab(modelAsset);
+            model.name = "Model";
+            model.transform.SetParent(visuals, false);
+            model.GetComponentInChildren<SkinnedMeshRenderer>().sharedMaterial = GetCatMaterial();
 
-            var head = CreateVisual("Head", PrimitiveType.Sphere, torso, new Vector3(0f, 0.7f, 0.3f), new Vector3(0.36f, 0.33f, 0.34f), m.CatPrimary).transform;
-            head.localRotation = Quaternion.Euler(6f, 0f, 0f);
-            var muzzle = CreateVisual("Muzzle", PrimitiveType.Sphere, torso, new Vector3(0f, 0.66f, 0.46f), new Vector3(0.16f, 0.1f, 0.1f), m.CatSecondary);
-            muzzle.transform.localRotation = Quaternion.Euler(-4f, 0f, 0f);
-            var nose = CreateVisual("Nose", PrimitiveType.Cube, torso, new Vector3(0f, 0.69f, 0.51f), Vector3.one * 0.05f, m.Shadow);
-            nose.transform.localRotation = Quaternion.Euler(0f, 45f, 0f);
-            CreateVisual("Eye L", PrimitiveType.Sphere, torso, new Vector3(-0.08f, 0.75f, 0.45f), Vector3.one * 0.06f, m.Shadow);
-            CreateVisual("Eye R", PrimitiveType.Sphere, torso, new Vector3(0.08f, 0.75f, 0.45f), Vector3.one * 0.06f, m.Shadow);
+            var animator = model.GetComponent<Animator>();
+            if (animator == null)
+                animator = model.AddComponent<Animator>();
+            animator.runtimeAnimatorController = BuildCatAnimator(walkClip);
+            animator.applyRootMotion = false;
 
-            foreach (float side in new[] { -1f, 1f })
-            {
-                string label = side < 0 ? "L" : "R";
-                var ear = CreateVisual($"Ear {label}", PrimitiveType.Cube, torso, new Vector3(0.11f * side, 0.88f, 0.28f), new Vector3(0.1f, 0.18f, 0.04f), m.CatPrimary);
-                ear.transform.localRotation = Quaternion.Euler(0f, 0f, -12f * side);
-                var inner = CreateVisual($"Ear Inner {label}", PrimitiveType.Cube, torso, new Vector3(0.11f * side, 0.87f, 0.305f), new Vector3(0.05f, 0.11f, 0.02f), m.Shadow);
-                inner.transform.localRotation = Quaternion.Euler(0f, 0f, -12f * side);
-            }
-
-            var tailPivot = new GameObject("Tail Pivot").transform;
-            tailPivot.SetParent(torso, false);
-            tailPivot.localPosition = new Vector3(0f, 0.5f, -0.3f);
-            var tail = CreateVisual("Tail", PrimitiveType.Capsule, tailPivot, new Vector3(0f, 0.172f, -0.246f), new Vector3(0.08f, 0.3f, 0.08f), m.CatPrimary);
-            tail.transform.localRotation = Quaternion.Euler(-55f, 0f, 0f);
-            CreateVisual("Tail Tip", PrimitiveType.Sphere, tailPivot, new Vector3(0f, 0.344f, -0.491f), Vector3.one * 0.1f, m.CatSecondary);
-
-            var legs = new GameObject("Legs").transform;
-            legs.SetParent(visuals, false);
-            foreach (float x in new[] { -0.14f, 0.14f })
-            foreach (float z in new[] { -0.2f, 0.2f })
-            {
-                var leg = CreateVisual("Leg", PrimitiveType.Capsule, legs, new Vector3(x, 0.12f, z), new Vector3(0.09f, 0.12f, 0.09f), m.CatPrimary);
-                leg.transform.localRotation = Quaternion.Euler(4f * Mathf.Sign(z), 0f, 3f * Mathf.Sign(x));
-                CreateVisual("Paw", PrimitiveType.Sphere, legs, new Vector3(x * 1.05f, 0.035f, z * 1.05f), Vector3.one * 0.072f, m.CatSecondary);
-            }
+            Transform tailRoot = FindDescendant(model.transform, CatTailRootBone);
+            if (tailRoot == null)
+                throw new System.InvalidOperationException($"Bone '{CatTailRootBone}' not found in {CatModelPath}.");
 
             cat.AddComponent<CatInput>();
-            cat.AddComponent<CatController>();
+            var controller = cat.AddComponent<CatController>();
+            SetReference(controller, "animator", animator);
             cat.AddComponent<CatCombat>();
             var idle = cat.AddComponent<CatIdleMotion>();
-            SetReference(idle, "torso", torso);
-            SetReference(idle, "tailPivot", tailPivot);
+            SetReference(idle, "torso", model.transform);
+            SetReference(idle, "tailPivot", tailRoot);
             return cat;
+        }
+
+        // Tripo exports the walk as a non-looping take; name it and loop it once, in the importer.
+        static AnimationClip ConfigureCatModel()
+        {
+            var importer = (ModelImporter)AssetImporter.GetAtPath(CatModelPath);
+            ModelImporterClipAnimation[] clips = importer.clipAnimations;
+            if (clips.Length != 1 || clips[0].name != CatWalkClip || !clips[0].loopTime)
+            {
+                clips = importer.defaultClipAnimations;
+                if (clips.Length != 1)
+                    throw new System.InvalidOperationException($"Expected one animation take in {CatModelPath}, found {clips.Length}.");
+                clips[0].name = CatWalkClip;
+                clips[0].loopTime = true;
+                importer.clipAnimations = clips;
+                importer.SaveAndReimport();
+            }
+
+            return AssetDatabase.LoadAllAssetsAtPath(CatModelPath).OfType<AnimationClip>().Single(c => c.name == CatWalkClip);
+        }
+
+        static RuntimeAnimatorController BuildCatAnimator(AnimationClip walkClip)
+        {
+            AssetDatabase.DeleteAsset(CatControllerPath);
+            var controller = AnimatorController.CreateAnimatorControllerAtPath(CatControllerPath);
+            controller.AddParameter("Speed", AnimatorControllerParameterType.Float);
+            controller.AddParameter("Grounded", AnimatorControllerParameterType.Bool);
+
+            AnimatorStateMachine states = controller.layers[0].stateMachine;
+            // No motion: the Animator writes the model's rest pose, a relaxed stand.
+            AnimatorState idle = states.AddState("Idle");
+            AnimatorState walk = states.AddState("Walk");
+            walk.motion = walkClip;
+            // Playback rate = Speed (m/s) x this. Tripo's walk covers far less ground than the controller's speeds,
+            // so this trades some foot slide for a cadence that doesn't look frantic.
+            walk.speed = WalkPlaybackPerMeter;
+            walk.speedParameter = "Speed";
+            walk.speedParameterActive = true;
+            states.defaultState = idle;
+
+            AnimatorStateTransition toWalk = idle.AddTransition(walk);
+            toWalk.hasExitTime = false;
+            toWalk.duration = 0.15f;
+            toWalk.AddCondition(AnimatorConditionMode.Greater, MovingThreshold, "Speed");
+            AnimatorStateTransition toIdle = walk.AddTransition(idle);
+            toIdle.hasExitTime = false;
+            toIdle.duration = 0.2f;
+            toIdle.AddCondition(AnimatorConditionMode.Less, MovingThreshold, "Speed");
+
+            AssetDatabase.SaveAssets();
+            return controller;
+        }
+
+        static Material GetCatMaterial()
+        {
+            var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(CatTexturePath);
+            if (texture == null)
+                throw new System.InvalidOperationException($"Cat texture not found at {CatTexturePath}.");
+            Material material = GetMaterial("Cat", Palette.TextureTint);
+            material.mainTexture = texture;
+            material.SetFloat("_Smoothness", 0.15f);
+            return material;
+        }
+
+        static Transform FindDescendant(Transform parent, string name)
+        {
+            foreach (Transform child in parent)
+            {
+                if (child.name == name)
+                    return child;
+                Transform found = FindDescendant(child, name);
+                if (found != null)
+                    return found;
+            }
+            return null;
         }
 
         static void BuildDummies(Materials m)
@@ -284,13 +346,6 @@ namespace CatGame.EditorTools
             go.transform.localPosition = position;
             go.transform.localScale = scale;
             go.GetComponent<Renderer>().sharedMaterial = material;
-            return go;
-        }
-
-        static GameObject CreateVisual(string name, PrimitiveType type, Transform parent, Vector3 position, Vector3 scale, Material material)
-        {
-            var go = CreatePrimitive(name, type, parent, position, scale, material);
-            Object.DestroyImmediate(go.GetComponent<Collider>());
             return go;
         }
 
