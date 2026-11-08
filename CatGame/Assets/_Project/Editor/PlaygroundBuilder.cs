@@ -16,11 +16,14 @@ namespace CatGame.EditorTools
         const string ScenePath = SceneFolder + "/Playground.unity";
         const string VolumeProfilePath = SettingsFolder + "/PlaygroundPost.asset";
 
+        const string ToonShaderName = "CatGame/Toon";
+        const float OutlinePixels = 3.5f;   // at 1080p; the shader scales it with screen height
+
         const string CatFolder = "Assets/_Project/Art/Characters/Cat";
         const string CatModelPath = CatFolder + "/Cat.fbx";
         const string CatTexturePath = CatFolder + "/Cat_Albedo.jpg";
 
-        static Material baseMaterial;
+        static Shader toonShader;
 
         [MenuItem("Cat Game/Build Playground Scene")]
         static void BuildFromMenu() => BuildPlayground(interactive: true);
@@ -49,15 +52,15 @@ namespace CatGame.EditorTools
             AssetDatabase.Refresh();
 
             var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
-            baseMaterial = GetDefaultMaterial();
+            toonShader = GetToonShader();
 
             var mats = new Materials
             {
                 Ground = GetMaterial("Ground", Palette.Ground),
                 Structure = GetMaterial("Structure", Palette.Structure),
-                Props = GetMaterial("Props", Palette.Props),
+                Props = GetMaterial("Props", Palette.Props, Outline.HardEdged),
                 Shadow = GetMaterial("Shadow", Palette.Shadow),
-                Accent = GetMaterial("Accent", Palette.Accent),
+                Accent = GetMaterial("Accent", Palette.Accent, Outline.Smooth),
             };
 
             BuildLevel(mats);
@@ -185,9 +188,8 @@ namespace CatGame.EditorTools
             var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(CatTexturePath);
             if (texture == null)
                 throw new System.InvalidOperationException($"Cat texture not found at {CatTexturePath}.");
-            Material material = GetMaterial("Cat", Palette.TextureTint);
+            Material material = GetMaterial("Cat", Palette.TextureTint, Outline.Smooth);
             material.mainTexture = texture;
-            material.SetFloat("_Smoothness", 0.15f);
             return material;
         }
 
@@ -323,26 +325,34 @@ namespace CatGame.EditorTools
             return go;
         }
 
-        static Material GetDefaultMaterial()
+        // Outlines suit rounded silhouettes; on the ground and walls they'd just trace big flat slabs.
+        enum Outline { None, Smooth, HardEdged }
+
+        static Shader GetToonShader()
         {
-            Material material = GraphicsSettings.currentRenderPipeline != null
-                ? GraphicsSettings.currentRenderPipeline.defaultMaterial
-                : null;
-            if (material == null)
-                throw new System.InvalidOperationException("No render pipeline default material; is URP active?");
-            return material;
+            Shader shader = Shader.Find(ToonShaderName);
+            if (shader == null)
+                throw new System.InvalidOperationException($"Shader '{ToonShaderName}' not found.");
+            return shader;
         }
 
-        static Material GetMaterial(string name, Color color)
+        static Material GetMaterial(string name, Color color, Outline outline = Outline.None)
         {
             string path = $"{MaterialFolder}/{name}.mat";
             var material = AssetDatabase.LoadAssetAtPath<Material>(path);
             if (material == null)
             {
-                material = new Material(baseMaterial) { name = name };
+                material = new Material(toonShader) { name = name };
                 AssetDatabase.CreateAsset(material, path);
             }
+            material.shader = toonShader;
             material.color = color;
+            // Shadows are a cooler, darker sibling of the base colour; outlines use the palette's darkest value.
+            material.SetColor("_ShadowTint", Color.Lerp(Palette.Shadow, Palette.TextureTint, 0.45f));
+            material.SetColor("_OutlineColor", Palette.Shadow);
+            material.SetFloat("_OutlineWidth", outline == Outline.None ? 0f : OutlinePixels);
+            // Hard-edged primitives have split normals that would tear the hull at corners.
+            material.SetFloat("_OutlineFromCenter", outline == Outline.HardEdged ? 1f : 0f);
             EditorUtility.SetDirty(material);
             return material;
         }
